@@ -14,7 +14,7 @@ from telegram.ext import (
     filters
 )
 
-BOT_TOKEN = '7623380258:AAH9qt6V2-eB5ZNnLkKO9u6V0TYvUhpldmo'
+BOT_TOKEN = '7624379060:AAGxjlyFlMpqZ5Es2u5eRwVTih0pMt4DuQ4'
 OWNER_ID = 6479495033  # Replace with your actual Telegram user ID
 
 # Enable logging
