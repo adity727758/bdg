@@ -27,7 +27,7 @@ logging.basicConfig(
 BIG_THRESHOLD = 5
 HISTORY_SIZE = 50
 PREDICTION_WINDOW = 5
-BDG_ANALYSIS_DEPTH = 80
+BDG_ANALYSIS_DEPTH = 8
 
 # Color mapping (Red and Green only)
 COLOR_MAP = {
