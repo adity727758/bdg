@@ -23,11 +23,11 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Game constants
+# Enhanced game constants
 BIG_THRESHOLD = 5
-HISTORY_SIZE = 50
-PREDICTION_WINDOW = 5
-BDG_ANALYSIS_DEPTH = 8
+HISTORY_SIZE = 100  # Increased history size
+PREDICTION_WINDOW = 10  # Increased window for better pattern recognition
+ANALYSIS_DEPTH = 20  # Deeper analysis for better predictions
 
 # Color mapping (Red and Green only)
 COLOR_MAP = {
@@ -43,7 +43,7 @@ COLOR_MAP = {
     9: '🟢 Green'
 }
 
-# Platform links - Now with editable structure
+# Platform links
 PLATFORM_LINKS = {
     'bdg': {
         'name': 'BDG Games',
@@ -59,12 +59,17 @@ PLATFORM_LINKS = {
         'name': 'Big Mumbai',
         'url': 'https://bigmumbai.com',
         'description': 'Official Big Mumbai website'
+    },
+    'daman': {
+        'name': 'Daman Games',
+        'url': 'https://damangames.com',
+        'description': 'Official Daman Games website'
     }
 }
 
 # Track recent game history
 game_history = deque(maxlen=HISTORY_SIZE)
-live_results = deque(maxlen=100)
+live_results = deque(maxlen=200)  # Increased live results storage
 subscribers = {
     'bdg': {
         '1min': set(),
@@ -77,18 +82,30 @@ subscribers = {
     'mumbai': {
         '1min': set(),
         '30sec': set()
+    },
+    'daman': {
+        '1min': set(),
+        '30sec': set()
     }
 }
 
-# User database
+# Enhanced user database
 user_database = {}
 
-# Prediction patterns
+# Advanced prediction patterns
 prediction_patterns = {
     'markov_chain': defaultdict(lambda: defaultdict(int)),
     'frequency': defaultdict(int),
+    'color_transitions': defaultdict(lambda: defaultdict(int)),
     'hot_numbers': [],
-    'cold_numbers': []
+    'cold_numbers': [],
+    'streaks': {
+        'big': {'current': 0, 'max': 0},
+        'small': {'current': 0, 'max': 0},
+        'red': {'current': 0, 'max': 0},
+        'green': {'current': 0, 'max': 0}
+    },
+    'last_updated': datetime.now(pytz.utc)
 }
 
 # Track URL editing state
@@ -107,20 +124,30 @@ def classify_number(number):
     }
 
 def predict_numbers(is_big):
-    if is_big:
-        big_numbers = [5, 6, 7, 8, 9]
-        return random.sample(big_numbers, 3)
-    else:
-        small_numbers = [0, 1, 2, 3, 4]
-        return random.sample(small_numbers, 3)
+    # Base numbers based on big/small
+    base_numbers = list(range(5, 10)) if is_big else list(range(0, 5))
+    
+    # If we have hot numbers from analysis, use them
+    if prediction_patterns['hot_numbers']:
+        hot_in_range = [n for n in prediction_patterns['hot_numbers'] if (n >= 5 if is_big else n < 5)]
+        if hot_in_range:
+            base_numbers = hot_in_range + [n for n in base_numbers if n not in hot_in_range]
+    
+    # Ensure we have enough numbers
+    if len(base_numbers) < 3:
+        base_numbers.extend(random.sample([n for n in range(10) if n not in base_numbers], 3 - len(base_numbers)))
+    
+    return random.sample(base_numbers, min(3, len(base_numbers)))
 
-def analyze_bdg_patterns(numbers, game_type):
+def analyze_patterns(numbers, game_type):
     if not numbers:
         return {
             'big_small': ('⚪ Small', 50),
             'color': ('🔴 Red', 50),
             'numbers': [0, 1, 2],
-            'confidence': 0
+            'confidence': 0,
+            'hot_numbers': [],
+            'cold_numbers': []
         }
     
     digits = []
@@ -133,52 +160,172 @@ def analyze_bdg_patterns(numbers, game_type):
             'big_small': ('🔵 Big' if is_big else '⚪ Small', 50),
             'color': (random.choice(['🔴 Red', '🟢 Green']), 50),
             'numbers': predict_numbers(is_big),
-            'confidence': 50
+            'confidence': 50,
+            'hot_numbers': [],
+            'cold_numbers': []
         }
     
-    big_count = sum(d >= BIG_THRESHOLD for d in digits[-10:])
-    small_count = 10 - big_count
-    big_prob = big_count / 10
-    small_prob = small_count / 10
+    # Update streaks
+    update_streaks(digits)
     
-    if random.random() < big_prob:
-        big_small_pred = '🔵 Big'
-        bs_confidence = min(95, int(big_prob * 100))
-        is_big = True
+    # Enhanced Big/Small analysis with weighted history
+    window_size = min(ANALYSIS_DEPTH, len(digits))
+    weighted_big = 0
+    weighted_small = 0
+    
+    for i in range(window_size):
+        weight = (window_size - i) / window_size  # More weight to recent numbers
+        if digits[-i-1] >= BIG_THRESHOLD:
+            weighted_big += weight
+        else:
+            weighted_small += weight
+    
+    big_prob = weighted_big / (weighted_big + weighted_small)
+    small_prob = 1 - big_prob
+    
+    # Dynamic threshold adjustment
+    dynamic_threshold = BIG_THRESHOLD
+    if big_prob > 0.7:
+        dynamic_threshold = max(4, BIG_THRESHOLD - 1)
+    elif small_prob > 0.7:
+        dynamic_threshold = min(6, BIG_THRESHOLD + 1)
+    
+    # Final big/small prediction with dynamic threshold
+    recent_avg = sum(digits[-5:]) / 5 if len(digits) >= 5 else BIG_THRESHOLD
+    is_big = recent_avg >= dynamic_threshold
+    big_small_pred = '🔵 Big' if is_big else '⚪ Small'
+    bs_confidence = min(95, int(max(big_prob, small_prob) * 100))
+    
+    # Enhanced color prediction
+    color_pred, color_confidence = predict_color(digits)
+    
+    # Number prediction with hot/cold analysis
+    freq = defaultdict(int)
+    for i, d in enumerate(digits[-ANALYSIS_DEPTH:]):
+        freq[d % 10] += (ANALYSIS_DEPTH - i) * 0.2  # Weight recent numbers more
+    
+    hot_numbers = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:3]
+    cold_numbers = sorted(freq.items(), key=lambda x: x[1])[:3]
+    
+    predicted_numbers = list({n for n, _ in hot_numbers})
+    if is_big:
+        predicted_numbers.extend([n for n in range(5, 10) if n not in predicted_numbers])
     else:
-        big_small_pred = '⚪ Small'
-        bs_confidence = min(95, int(small_prob * 100))
-        is_big = False
+        predicted_numbers.extend([n for n in range(0, 5) if n not in predicted_numbers])
     
-    number_preds = predict_numbers(is_big)
+    predicted_numbers = list(dict.fromkeys(predicted_numbers))[:3]
     
-    color_transitions = defaultdict(lambda: defaultdict(int))
-    for i in range(len(digits)-1):
-        current_color = COLOR_MAP.get(digits[i], '🔴 Red')
-        next_color = COLOR_MAP.get(digits[i+1], '🔴 Red')
-        color_transitions[current_color][next_color] += 1
+    # Update global patterns
+    update_global_patterns(digits, hot_numbers, cold_numbers)
     
-    last_color = COLOR_MAP.get(digits[-1], '🔴 Red')
-    if color_transitions[last_color]:
-        total = sum(color_transitions[last_color].values())
-        color_probs = {k: v/total for k, v in color_transitions[last_color].items()}
-        color_pred = max(color_probs.items(), key=lambda x: x[1])[0]
-        color_confidence = min(95, int(max(color_probs.values()) * 100))
-    else:
-        color_counts = defaultdict(int)
-        for d in digits[-10:]:
-            color_counts[COLOR_MAP.get(d, '🔴 Red')] += 1
-        color_pred = max(color_counts.items(), key=lambda x: x[1])[0]
-        color_confidence = min(95, int(max(color_counts.values()) / 10 * 100))
+    # Calculate overall confidence
+    confidence_factors = [
+        bs_confidence * 0.4,
+        color_confidence * 0.4,
+        (sum(f for _, f in hot_numbers[:3]) / (3 * max(1, max(freq.values())))) * 20
+    ]
     
-    confidence = int((bs_confidence * 0.4) + (color_confidence * 0.4) + (50 * 0.2))
+    confidence = min(95, int(sum(confidence_factors)))
     
     return {
         'big_small': (big_small_pred, bs_confidence),
         'color': (color_pred, color_confidence),
-        'numbers': number_preds,
-        'confidence': confidence
+        'numbers': predicted_numbers,
+        'confidence': confidence,
+        'hot_numbers': [n for n, _ in hot_numbers],
+        'cold_numbers': [n for n, _ in cold_numbers]
     }
+
+def update_streaks(digits):
+    # Reset streaks if needed
+    if (datetime.now(pytz.utc) - prediction_patterns['last_updated']).total_seconds() > 3600:
+        for streak in prediction_patterns['streaks'].values():
+            streak['current'] = 0
+    
+    # Update big/small streaks
+    current_bs = 'big' if digits[-1] >= BIG_THRESHOLD else 'small'
+    opposite_bs = 'small' if current_bs == 'big' else 'big'
+    
+    if len(digits) > 1:
+        prev_bs = 'big' if digits[-2] >= BIG_THRESHOLD else 'small'
+        if current_bs == prev_bs:
+            prediction_patterns['streaks'][current_bs]['current'] += 1
+            prediction_patterns['streaks'][current_bs]['max'] = max(
+                prediction_patterns['streaks'][current_bs]['max'],
+                prediction_patterns['streaks'][current_bs]['current']
+            )
+        else:
+            prediction_patterns['streaks'][current_bs]['current'] = 1
+            prediction_patterns['streaks'][opposite_bs]['current'] = 0
+    
+    # Update color streaks
+    current_color = 'red' if COLOR_MAP.get(digits[-1], '').startswith('🔴') else 'green'
+    opposite_color = 'green' if current_color == 'red' else 'red'
+    
+    if len(digits) > 1:
+        prev_color = 'red' if COLOR_MAP.get(digits[-2], '').startswith('🔴') else 'green'
+        if current_color == prev_color:
+            prediction_patterns['streaks'][current_color]['current'] += 1
+            prediction_patterns['streaks'][current_color]['max'] = max(
+                prediction_patterns['streaks'][current_color]['max'],
+                prediction_patterns['streaks'][current_color]['current']
+            )
+        else:
+            prediction_patterns['streaks'][current_color]['current'] = 1
+            prediction_patterns['streaks'][opposite_color]['current'] = 0
+    
+    prediction_patterns['last_updated'] = datetime.now(pytz.utc)
+
+def predict_color(digits):
+    last_color = COLOR_MAP.get(digits[-1], '🔴 Red')
+    
+    # Calculate color probabilities with smoothing and streak adjustment
+    if prediction_patterns['color_transitions'][last_color]:
+        total = sum(prediction_patterns['color_transitions'][last_color].values())
+        color_probs = {
+            '🔴 Red': (prediction_patterns['color_transitions'][last_color]['🔴 Red'] + 1) / (total + 2),
+            '🟢 Green': (prediction_patterns['color_transitions'][last_color]['🟢 Green'] + 1) / (total + 2)
+        }
+    else:
+        total_colors = sum(sum(v.values()) for v in prediction_patterns['color_transitions'].values())
+        color_probs = {
+            '🔴 Red': 0.5,
+            '🟢 Green': 0.5
+        }
+    
+    # Adjust for streaks
+    current_streak = prediction_patterns['streaks']['red']['current'] if last_color == '🔴 Red' else prediction_patterns['streaks']['green']['current']
+    if current_streak >= 3:
+        # Reduce probability of continuing long streaks
+        streak_color = '🔴 Red' if last_color == '🔴 Red' else '🟢 Green'
+        color_probs[streak_color] *= max(0.3, 1 - (current_streak * 0.15))
+        color_probs = {k: v/sum(color_probs.values()) for k, v in color_probs.items()}
+    
+    color_pred = max(color_probs.items(), key=lambda x: x[1])[0]
+    color_confidence = min(95, int(max(color_probs.values()) * 100))
+    
+    return color_pred, color_confidence
+
+def update_global_patterns(digits, hot_numbers, cold_numbers):
+    # Update Markov chain for numbers
+    for i in range(len(digits)-1):
+        current = digits[i] % 10
+        next_num = digits[i+1] % 10
+        prediction_patterns['markov_chain'][current][next_num] += 1
+    
+    # Update frequency counts
+    for d in digits[-ANALYSIS_DEPTH:]:
+        prediction_patterns['frequency'][d % 10] += 1
+    
+    # Update color transitions
+    for i in range(len(digits)-1):
+        current_color = COLOR_MAP.get(digits[i], '🔴 Red')
+        next_color = COLOR_MAP.get(digits[i+1], '🔴 Red')
+        prediction_patterns['color_transitions'][current_color][next_color] += 1
+    
+    # Update hot/cold numbers
+    prediction_patterns['hot_numbers'] = [n for n, _ in hot_numbers]
+    prediction_patterns['cold_numbers'] = [n for n, _ in cold_numbers]
 
 async def fetch_bdg_results(game_type):
     try:
@@ -203,16 +350,17 @@ async def analyze_and_predict_1min(context: ContextTypes.DEFAULT_TYPE):
             return
         
         live_results.extend(numbers)
-        predictions = analyze_bdg_patterns(numbers, '1min')
+        predictions = analyze_patterns(numbers, '1min')
         
         game_history.append({
             'time': current_time,
             'game': '1min',
             'numbers': numbers,
-            'predictions': predictions
+            'predictions': predictions,
+            'platform': 'bdg'
         })
         
-        for platform in ['bdg', 'tc', 'mumbai']:
+        for platform in ['bdg', 'tc', 'mumbai', 'daman']:
             if subscribers[platform]['1min']:
                 recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
                 message = (
@@ -222,7 +370,8 @@ async def analyze_and_predict_1min(context: ContextTypes.DEFAULT_TYPE):
                     f"🎯 Betting Recommendations:\n"
                     f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
                     f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
-                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['numbers'])}\n\n"
+                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['numbers'])}\n"
+                    f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
                     f"📈 Overall Confidence: {predictions['confidence']}%\n"
                     f"🔄 Next update at {(current_time + timedelta(minutes=1)).strftime('%H:%M:%S UTC')}"
                 )
@@ -248,16 +397,17 @@ async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
             return
         
         live_results.extend(numbers)
-        predictions = analyze_bdg_patterns(numbers, '30sec')
+        predictions = analyze_patterns(numbers, '30sec')
         
         game_history.append({
             'time': current_time,
             'game': '30sec',
             'numbers': numbers,
-            'predictions': predictions
+            'predictions': predictions,
+            'platform': 'bdg'
         })
         
-        for platform in ['bdg', 'tc', 'mumbai']:
+        for platform in ['bdg', 'tc', 'mumbai', 'daman']:
             if subscribers[platform]['30sec']:
                 recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
                 message = (
@@ -267,7 +417,8 @@ async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
                     f"🎯 Betting Recommendations:\n"
                     f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
                     f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
-                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['numbers'])}\n\n"
+                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['numbers'])}\n"
+                    f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
                     f"📈 Overall Confidence: {predictions['confidence']}%\n"
                     f"🔄 Next update at {(current_time + timedelta(seconds=30)).strftime('%H:%M:%S UTC')}"
                 )
@@ -282,6 +433,66 @@ async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in 30-second BDG analysis: {str(e)}")
 
+async def perform_prediction_update(update: Update, platform: str):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != OWNER_ID:
+        await query.edit_message_text(
+            "❌ This feature is only available to the bot owner.",
+            reply_markup=get_main_menu_keyboard(query.from_user.id)
+        )
+        return
+    
+    current_time = datetime.now(pytz.utc)
+    logging.info(f"Running manual prediction update for {platform} at {current_time}")
+    
+    game_types = ['1min', '30sec']
+    messages = []
+    
+    for game_type in game_types:
+        numbers = await fetch_bdg_results(game_type)
+        if not numbers:
+            messages.append(f"⚠️ Could not generate results for {platform.upper()} {game_type}")
+            continue
+        
+        predictions = analyze_patterns(numbers, game_type)
+        
+        game_history.append({
+            'time': current_time,
+            'game': game_type,
+            'numbers': numbers,
+            'predictions': predictions,
+            'platform': platform
+        })
+        
+        recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
+        message = (
+            f"🔄 Manual Update: {platform.upper()} {game_type} Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
+            f"🔢 Recent Periods: {numbers[-2:]}\n"
+            f"🔍 Last Digits: {recent_digits}\n\n"
+            f"🎯 Updated Betting Recommendations:\n"
+            f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
+            f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
+            f"3. Hot Numbers: {', '.join(str(n) for n in predictions['hot_numbers'])}\n"
+            f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
+            f"📈 Overall Confidence: {predictions['confidence']}%"
+        )
+        messages.append(message)
+        
+        for chat_id in subscribers[platform][game_type]:
+            try:
+                await query.bot.send_message(chat_id=chat_id, text=message)
+            except Exception as e:
+                logging.error(f"Error sending to {chat_id}: {str(e)}")
+                subscribers[platform][game_type].discard(chat_id)
+    
+    response_message = "\n\n".join(messages)
+    await query.edit_message_text(
+        response_message,
+        reply_markup=get_main_menu_keyboard(query.from_user.id)
+    )
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_database[user.id] = {
@@ -291,30 +502,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'date': datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
     }
     
-    keyboard = [
-        [InlineKeyboardButton("🎲 BDG Games", callback_data='platform_bdg')],
-        [InlineKeyboardButton("🎰 TC Lottery", callback_data='platform_tc')],
-        [InlineKeyboardButton("🏙️ Big Mumbai", callback_data='platform_mumbai')],
-        [InlineKeyboardButton("🔗 Platform Links", callback_data='platform_links')],
-        [InlineKeyboardButton("📊 View History", callback_data='view_history')],
-        [InlineKeyboardButton("🔍 EK Analysis", callback_data='ek_analysis')]
-    ]
-    
-    if user.id == OWNER_ID:
-        keyboard.append([
-            InlineKeyboardButton("🔧 Update Predictions", callback_data='update_predictions'),
-            InlineKeyboardButton("👥 View Users", callback_data='view_users')
-        ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
         "🎲 Welcome to Multi-Platform Lottery Predictor Bot!\n\n"
         "🔹 Get predictions for multiple lottery platforms\n"
         "🔹 Choose your preferred platform and game type\n"
         "🔹 Receive automatic predictions for your selection\n\n"
         "Please select a platform:",
-        reply_markup=reply_markup
+        reply_markup=get_main_menu_keyboard(user.id)
     )
 
 async def show_platform_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,6 +543,7 @@ async def edit_links_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎲 Edit BDG Link", callback_data='edit_bdg_link')],
         [InlineKeyboardButton("🎰 Edit TC Link", callback_data='edit_tc_link')],
         [InlineKeyboardButton("🏙️ Edit Mumbai Link", callback_data='edit_mumbai_link')],
+        [InlineKeyboardButton("🌉 Edit Daman Link", callback_data='edit_daman_link')],
         [InlineKeyboardButton("🔙 Back", callback_data='platform_links')]
     ]
     
@@ -419,7 +614,8 @@ async def show_platform_menu(update: Update, platform: str):
     platform_name = {
         'bdg': '🎲 BDG Games',
         'tc': '🎰 TC Lottery',
-        'mumbai': '🏙️ Big Mumbai'
+        'mumbai': '🏙️ Big Mumbai',
+        'daman': '🌉 Daman Games'
     }.get(platform, platform)
     
     keyboard = [
@@ -449,12 +645,14 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = "📊 Recent Prediction History (Last 5):\n\n"
     for entry in list(game_history)[-5:]:
         message += (
-            f"⏰ {entry['time'].strftime('%H:%M:%S')} ({entry['game']})\n"
+            f"⏰ {entry['time'].strftime('%H:%M:%S')} ({entry['game']}) - {entry.get('platform', 'BDG').upper()}\n"
             f"🔢 Numbers: {entry['numbers'][-2:]}\n"
             f"🎯 Predictions:\n"
             f" - Big/Small: {entry['predictions']['big_small'][0]} ({entry['predictions']['big_small'][1]}%)\n"
             f" - Color: {entry['predictions']['color'][0]} ({entry['predictions']['color'][1]}%)\n"
             f" - Numbers: {', '.join(str(n) for n in entry['predictions']['numbers'])}\n"
+            f" - Hot Numbers: {', '.join(str(n) for n in entry['predictions'].get('hot_numbers', []))}\n"
+            f" - Cold Numbers: {', '.join(str(n) for n in entry['predictions'].get('cold_numbers', []))}\n"
             f"📊 Confidence: {entry['predictions']['confidence']}%\n\n"
         )
     
@@ -499,6 +697,16 @@ async def ek_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ek_message += f"\n🔥 Hot Number: {hot_num} ({freq[hot_num]}x)\n"
     ek_message += f"❄️ Cold Number: {cold_num} ({freq[cold_num]}x)\n"
     
+    # Add streak information
+    bs_streak = prediction_patterns['streaks']['big'] if digits[-1] >= BIG_THRESHOLD else prediction_patterns['streaks']['small']
+    color_streak = prediction_patterns['streaks']['red'] if COLOR_MAP.get(digits[-1], '').startswith('🔴') else prediction_patterns['streaks']['green']
+    
+    ek_message += (
+        f"\n📈 Current Streaks:\n"
+        f"Big/Small: {bs_streak['current']} (Max: {bs_streak['max']})\n"
+        f"Color: {color_streak['current']} (Max: {color_streak['max']})"
+    )
+    
     if update.callback_query:
         await update.callback_query.edit_message_text(
             ek_message,
@@ -518,23 +726,9 @@ async def update_predictions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
     
-    keyboard = [
-        [InlineKeyboardButton("🎲 BDG Games", callback_data='update_bdg')],
-        [InlineKeyboardButton("🎰 TC Lottery", callback_data='update_tc')],
-        [InlineKeyboardButton("🏙️ Big Mumbai", callback_data='update_mumbai')],
-        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_to_main')]
-    ]
+    latest_results = list(live_results)[-ANALYSIS_DEPTH:] if live_results else []
     
-    await query.edit_message_text(
-        "🔄 Select which platform's predictions you want to update:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def perform_prediction_update(update: Update, platform: str):
-    query = update.callback_query
-    await query.answer()
-    
-    if not live_results:
+    if not latest_results:
         await query.edit_message_text(
             "⚠️ Not enough data to update patterns yet.",
             reply_markup=get_main_menu_keyboard(query.from_user.id)
@@ -542,37 +736,59 @@ async def perform_prediction_update(update: Update, platform: str):
         return
     
     digits = []
-    for num in live_results:
+    for num in latest_results:
         digits.extend(extract_bdg_digits(num))
     
-    prediction_patterns['markov_chain'] = defaultdict(lambda: defaultdict(int))
-    for i in range(len(digits)-1):
-        current = digits[i] % 10
-        next_num = digits[i+1] % 10
-        prediction_patterns['markov_chain'][current][next_num] += 1
+    # Perform comprehensive analysis
+    predictions = analyze_patterns(latest_results, 'manual_update')
     
-    prediction_patterns['frequency'] = defaultdict(int)
-    for d in digits[-50:]:
-        prediction_patterns['frequency'][d % 10] += 1
+    # Prepare detailed analysis message
+    message = "🔄 Updated Prediction Patterns:\n\n"
+    message += "📊 Big/Small Analysis:\n"
+    message += f"🔵 Big: {predictions['big_small'][1]}% (Current streak: {prediction_patterns['streaks']['big']['current']})\n"
+    message += f"⚪ Small: {100 - predictions['big_small'][1]}% (Current streak: {prediction_patterns['streaks']['small']['current']})\n\n"
     
-    sorted_freq = sorted(prediction_patterns['frequency'].items(), key=lambda x: x[1], reverse=True)
-    prediction_patterns['hot_numbers'] = [x[0] for x in sorted_freq[:3]]
-    prediction_patterns['cold_numbers'] = [x[0] for x in sorted_freq[-3:]]
+    message += "🎨 Color Analysis:\n"
+    message += f"🔴 Red: {predictions['color'][1]}% (Current streak: {prediction_patterns['streaks']['red']['current']})\n"
+    message += f"🟢 Green: {100 - predictions['color'][1]}% (Current streak: {prediction_patterns['streaks']['green']['current']})\n\n"
     
-    platform_name = {
-        'bdg': 'BDG Games',
-        'tc': 'TC Lottery',
-        'mumbai': 'Big Mumbai'
-    }.get(platform, platform)
+    message += "🔢 Number Analysis:\n"
+    message += f"🔥 Hot Numbers: {', '.join(str(n) for n in predictions['hot_numbers'])}\n"
+    message += f"❄️ Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
     
-    message = f"✅ {platform_name} prediction patterns updated successfully!\n\n"
-    message += f"🔥 Hot Numbers: {', '.join(str(n) for n in prediction_patterns['hot_numbers'])}\n"
-    message += f"❄️ Cold Numbers: {', '.join(str(n) for n in prediction_patterns['cold_numbers'])}\n"
-    message += "📊 Markov chain and frequency tables updated with latest data."
+    message += "📈 Current Recommendations:\n"
+    if predictions['big_small'][1] > 60:
+        message += "➡️ Strong Big trend detected\n"
+    elif predictions['big_small'][1] < 40:
+        message += "➡️ Strong Small trend detected\n"
+    else:
+        message += "➡️ Neutral trend - consider both options\n"
+    
+    if predictions['color'][1] > 60:
+        message += f"➡️ Strong {predictions['color'][0]} trend detected\n"
+    elif predictions['color'][1] < 40:
+        opp_color = '🟢 Green' if predictions['color'][0] == '🔴 Red' else '🔴 Red'
+        message += f"➡️ Strong {opp_color} trend detected\n"
+    else:
+        message += "➡️ Neutral color trend\n"
+    
+    if prediction_patterns['streaks']['big']['current'] >= 3:
+        message += f"⚠️ Big streak of {prediction_patterns['streaks']['big']['current']} - consider Small soon\n"
+    if prediction_patterns['streaks']['small']['current'] >= 3:
+        message += f"⚠️ Small streak of {prediction_patterns['streaks']['small']['current']} - consider Big soon\n"
+    if prediction_patterns['streaks']['red']['current'] >= 3:
+        message += f"⚠️ Red streak of {prediction_patterns['streaks']['red']['current']} - consider Green soon\n"
+    if prediction_patterns['streaks']['green']['current'] >= 3:
+        message += f"⚠️ Green streak of {prediction_patterns['streaks']['green']['current']} - consider Red soon\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_to_main')],
+        [InlineKeyboardButton("🔄 Update Again", callback_data='update_predictions')]
+    ]
     
     await query.edit_message_text(
         message,
-        reply_markup=get_main_menu_keyboard(query.from_user.id)
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def view_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -672,7 +888,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             platform_name = {
                 'bdg': 'BDG Games',
                 'tc': 'TC Lottery',
-                'mumbai': 'Big Mumbai'
+                'mumbai': 'Big Mumbai',
+                'daman': 'Daman Games'
             }.get(platform, platform)
             
             message = (
@@ -715,16 +932,20 @@ def get_main_menu_keyboard(user_id):
         [InlineKeyboardButton("🎲 BDG Games", callback_data='platform_bdg')],
         [InlineKeyboardButton("🎰 TC Lottery", callback_data='platform_tc')],
         [InlineKeyboardButton("🏙️ Big Mumbai", callback_data='platform_mumbai')],
+        [InlineKeyboardButton("🌉 Daman Games", callback_data='platform_daman')],
         [InlineKeyboardButton("🔗 Platform Links", callback_data='platform_links')],
         [InlineKeyboardButton("📊 View History", callback_data='view_history')],
         [InlineKeyboardButton("🔍 EK Analysis", callback_data='ek_analysis')]
     ]
     
     if user_id == OWNER_ID:
-        keyboard.append([
-            InlineKeyboardButton("🔧 Update Predictions", callback_data='update_predictions'),
-            InlineKeyboardButton("👥 View Users", callback_data='view_users')
-        ])
+        owner_buttons = [
+            [
+                InlineKeyboardButton("👥 View Users", callback_data='view_users')
+            ],
+            [InlineKeyboardButton("🔧 Global Update", callback_data='update_predictions')]
+        ]
+        keyboard.extend(owner_buttons)
     
     return InlineKeyboardMarkup(keyboard)
 
