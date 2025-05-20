@@ -28,6 +28,8 @@ BIG_THRESHOLD = 5
 HISTORY_SIZE = 100  # Increased history size
 PREDICTION_WINDOW = 10  # Increased window for better pattern recognition
 ANALYSIS_DEPTH = 20  # Deeper analysis for better predictions
+TREND_NOTIFICATION_INTERVAL_MIN = 25  # Average interval between trend notifications
+TREND_NOTIFICATION_VARIATION_MIN = 5  # Variation in minutes (+/-)
 
 # Color mapping (Red and Green only)
 COLOR_MAP = {
@@ -42,6 +44,12 @@ COLOR_MAP = {
     8: '🔴 Red',
     9: '🟢 Green'
 }
+
+# Roulette constants
+ROULETTE_NUMBERS = list(range(0, 37))  # 0-36
+ROULETTE_RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
+ROULETTE_BLACK_NUMBERS = [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35]
+ROULETTE_GREEN_NUMBER = [0]
 
 # Platform links
 PLATFORM_LINKS = {
@@ -64,8 +72,25 @@ PLATFORM_LINKS = {
         'name': 'Daman Games',
         'url': 'https://damangames.com',
         'description': 'Official Daman Games website'
+    },
+    'auto': {
+        'name': 'AUTO Roulette',
+        'url': 'https://autoroulette.com',
+        'description': 'Official AUTO Roulette website'
     }
 }
+
+# Available chains
+AVAILABLE_CHAINS = {
+    'bdg': 'BDG Chain',
+    'tc': 'TC Chain',
+    'mumbai': 'Mumbai Chain',
+    'daman': 'Daman Chain',
+    'auto': 'AUTO Roulette'
+}
+
+# Track active chain for each user
+user_active_chains = defaultdict(lambda: 'bdg')  # Default to BDG chain
 
 # Track recent game history
 game_history = deque(maxlen=HISTORY_SIZE)
@@ -86,6 +111,9 @@ subscribers = {
     'daman': {
         '1min': set(),
         '30sec': set()
+    },
+    'auto': {
+        '45sec': set()  # Changed from 40sec to 45sec
     }
 }
 
@@ -116,6 +144,29 @@ def extract_bdg_digits(period_number):
     truncated_num = num_str[:-1]
     return [int(d) for d in truncated_num[-5:]]
 
+def extract_tc_digits(period_number):
+    num_str = str(period_number)
+    return [int(d) for d in num_str[-5:]]
+
+def extract_mumbai_digits(period_number):
+    num_str = str(period_number)
+    return [int(d) for d in num_str[-4:]]
+
+def extract_daman_digits(period_number):
+    num_str = str(period_number)
+    return [int(d) for d in num_str[-3:]]
+
+def get_extractor(chain):
+    if chain == 'bdg':
+        return extract_bdg_digits
+    elif chain == 'tc':
+        return extract_tc_digits
+    elif chain == 'mumbai':
+        return extract_mumbai_digits
+    elif chain == 'daman':
+        return extract_daman_digits
+    return extract_bdg_digits
+
 def classify_number(number):
     return {
         'big_small': '🔵 Big' if number >= BIG_THRESHOLD else '⚪ Small',
@@ -139,7 +190,96 @@ def predict_numbers(is_big):
     
     return random.sample(base_numbers, min(3, len(base_numbers)))
 
-def analyze_patterns(numbers, game_type):
+def analyze_roulette_patterns(numbers, game_type):
+    if not numbers:
+        return {
+            'even_odd': ('Even', 50),
+            'red_black': ('Red', 50),
+            'low_high': ('1-18', 50),
+            'dozens': ('1st 12', 33),
+            'hot_numbers_low': list(range(1, 8)),  # 1-18 range
+            'hot_numbers_high': list(range(19, 26)),  # 19-36 range
+            'confidence': 50
+        }
+    
+    # Convert numbers to roulette results
+    roulette_results = [n % 37 for n in numbers]
+    
+    # Calculate frequencies
+    even_count = sum(1 for n in roulette_results if n != 0 and n % 2 == 0)
+    odd_count = sum(1 for n in roulette_results if n % 2 == 1)
+    red_count = sum(1 for n in roulette_results if n in ROULETTE_RED_NUMBERS)
+    black_count = sum(1 for n in roulette_results if n in ROULETTE_BLACK_NUMBERS)
+    green_count = sum(1 for n in roulette_results if n in ROULETTE_GREEN_NUMBER)
+    low_count = sum(1 for n in roulette_results if 1 <= n <= 18)
+    high_count = sum(1 for n in roulette_results if 19 <= n <= 36)
+    dozen1_count = sum(1 for n in roulette_results if 1 <= n <= 12)
+    dozen2_count = sum(1 for n in roulette_results if 13 <= n <= 24)
+    dozen3_count = sum(1 for n in roulette_results if 25 <= n <= 36)
+    
+    # Calculate probabilities
+    total = len(roulette_results)
+    even_prob = even_count / total if total else 0.5
+    odd_prob = odd_count / total if total else 0.5
+    red_prob = red_count / total if total else 0.5
+    black_prob = black_count / total if total else 0.5
+    low_prob = low_count / total if total else 0.5
+    high_prob = high_count / total if total else 0.5
+    dozen1_prob = dozen1_count / total if total else 0.33
+    dozen2_prob = dozen2_count / total if total else 0.33
+    dozen3_prob = dozen3_count / total if total else 0.33
+    
+    # Make predictions
+    even_odd_pred = 'Even' if even_prob > odd_prob else 'Odd'
+    even_odd_conf = int(max(even_prob, odd_prob) * 100)
+    
+    red_black_pred = 'Red' if red_prob > black_prob else 'Black'
+    red_black_conf = int(max(red_prob, black_prob) * 100)
+    
+    low_high_pred = '1-18' if low_prob > high_prob else '19-36'
+    low_high_conf = int(max(low_prob, high_prob) * 100)
+    
+    dozen_pred = '1st 12' if dozen1_prob > dozen2_prob and dozen1_prob > dozen3_prob else \
+                '2nd 12' if dozen2_prob > dozen3_prob else '3rd 12'
+    dozen_conf = int(max(dozen1_prob, dozen2_prob, dozen3_prob) * 100)
+    
+    # Number prediction (hot numbers) - now 7 numbers for each range
+    freq = defaultdict(int)
+    for n in roulette_results:
+        freq[n] += 1
+    
+    # Get hot numbers for 1-18 range
+    hot_numbers_low = sorted([(n, cnt) for n, cnt in freq.items() if 1 <= n <= 18], 
+                            key=lambda x: x[1], reverse=True)[:7]
+    hot_numbers_low = [n for n, _ in hot_numbers_low]
+    # Fill with random if not enough
+    if len(hot_numbers_low) < 7:
+        remaining = [n for n in range(1, 19) if n not in hot_numbers_low]
+        hot_numbers_low.extend(random.sample(remaining, 7 - len(hot_numbers_low)))
+    
+    # Get hot numbers for 19-36 range
+    hot_numbers_high = sorted([(n, cnt) for n, cnt in freq.items() if 19 <= n <= 36], 
+                             key=lambda x: x[1], reverse=True)[:7]
+    hot_numbers_high = [n for n, _ in hot_numbers_high]
+    # Fill with random if not enough
+    if len(hot_numbers_high) < 7:
+        remaining = [n for n in range(19, 37) if n not in hot_numbers_high]
+        hot_numbers_high.extend(random.sample(remaining, 7 - len(hot_numbers_high)))
+    
+    return {
+        'even_odd': (even_odd_pred, even_odd_conf),
+        'red_black': (red_black_pred, red_black_conf),
+        'low_high': (low_high_pred, low_high_conf),
+        'dozens': (dozen_pred, dozen_conf),
+        'hot_numbers_low': hot_numbers_low,
+        'hot_numbers_high': hot_numbers_high,
+        'confidence': min(95, int((even_odd_conf + red_black_conf + low_high_conf) / 3))
+    }
+
+def analyze_patterns(numbers, game_type, chain='bdg'):
+    if chain == 'auto':
+        return analyze_roulette_patterns(numbers, game_type)
+    
     if not numbers:
         return {
             'big_small': ('⚪ Small', 50),
@@ -150,9 +290,10 @@ def analyze_patterns(numbers, game_type):
             'cold_numbers': []
         }
     
+    extractor = get_extractor(chain)
     digits = []
     for num in numbers:
-        digits.extend(extract_bdg_digits(num))
+        digits.extend(extractor(num))
     
     if len(digits) < 10:
         is_big = random.choice([True, False])
@@ -339,30 +480,195 @@ async def fetch_bdg_results(game_type):
         logging.error(f"Error generating BDG results: {str(e)}")
         return None
 
+async def fetch_tc_results(game_type):
+    try:
+        if game_type == '30sec':
+            base = random.randint(100000, 999999)
+            return [base, base + 1]
+        else:
+            base = random.randint(100000, 999999)
+            return [base, base + 1]
+    except Exception as e:
+        logging.error(f"Error generating TC results: {str(e)}")
+        return None
+
+async def fetch_mumbai_results(game_type):
+    try:
+        if game_type == '30sec':
+            base = random.randint(1000, 9999)
+            return [base, base + 1]
+        else:
+            base = random.randint(1000, 9999)
+            return [base, base + 1]
+    except Exception as e:
+        logging.error(f"Error generating Mumbai results: {str(e)}")
+        return None
+
+async def fetch_daman_results(game_type):
+    try:
+        if game_type == '30sec':
+            base = random.randint(100, 999)
+            return [base, base + 1]
+        else:
+            base = random.randint(100, 999)
+            return [base, base + 1]
+    except Exception as e:
+        logging.error(f"Error generating Daman results: {str(e)}")
+        return None
+
+async def fetch_auto_results(game_type):
+    try:
+        # Always return last 5 numbers for AUTO Roulette
+        return [random.randint(0, 36) for _ in range(5)]
+    except Exception as e:
+        logging.error(f"Error generating AUTO results: {str(e)}")
+        return None
+
+async def fetch_results(chain, game_type):
+    if chain == 'bdg':
+        return await fetch_bdg_results(game_type)
+    elif chain == 'tc':
+        return await fetch_tc_results(game_type)
+    elif chain == 'mumbai':
+        return await fetch_mumbai_results(game_type)
+    elif chain == 'daman':
+        return await fetch_daman_results(game_type)
+    elif chain == 'auto':
+        return await fetch_auto_results(game_type)
+    return await fetch_bdg_results(game_type)
+
+async def analyze_trends():
+    if not live_results or len(live_results) < 20:  # Need at least 20 results for trend analysis
+        return None
+    
+    last_results = list(live_results)[-20:]  # Analyze last 20 results
+    digits = []
+    for num in last_results:
+        digits.extend(extract_bdg_digits(num))
+    
+    # Calculate big/small ratio
+    big_count = sum(1 for d in digits if d >= BIG_THRESHOLD)
+    small_count = len(digits) - big_count
+    big_ratio = big_count / len(digits)
+    
+    # Calculate color ratio
+    red_count = sum(1 for d in digits if COLOR_MAP.get(d, '').startswith('🔴'))
+    green_count = len(digits) - red_count
+    red_ratio = red_count / len(digits)
+    
+    # Determine trends
+    trend_messages = []
+    
+    # Big/Small trend
+    if big_ratio > 0.7:
+        trend_messages.append("📈 Strong BIG trend (70%+) - Good time to bet on Big numbers")
+    elif big_ratio < 0.3:
+        trend_messages.append("📉 Strong SMALL trend (70%+) - Good time to bet on Small numbers")
+    elif 0.4 < big_ratio < 0.6:
+        trend_messages.append("🔄 Neutral Big/Small trend - Market is balanced")
+    
+    # Color trend
+    if red_ratio > 0.7:
+        trend_messages.append("🔴 Strong RED trend (70%+) - Consider betting on Red")
+    elif red_ratio < 0.3:
+        trend_messages.append("🟢 Strong GREEN trend (70%+) - Consider betting on Green")
+    elif 0.4 < red_ratio < 0.6:
+        trend_messages.append("⚖️ Balanced Color trend - Both colors are appearing equally")
+    
+    # Hot/Cold numbers
+    freq = defaultdict(int)
+    for d in digits:
+        freq[d % 10] += 1
+    
+    hot_num = max(freq.items(), key=lambda x: x[1])[0]
+    cold_num = min(freq.items(), key=lambda x: x[1])[0]
+    
+    trend_messages.append(f"🔥 Hot Number: {hot_num} (appeared {freq[hot_num]} times)")
+    trend_messages.append(f"❄️ Cold Number: {cold_num} (appeared {freq[cold_num]} times)")
+    
+    # Streaks
+    current_big_streak = prediction_patterns['streaks']['big']['current']
+    current_small_streak = prediction_patterns['streaks']['small']['current']
+    current_red_streak = prediction_patterns['streaks']['red']['current']
+    current_green_streak = prediction_patterns['streaks']['green']['current']
+    
+    if current_big_streak >= 3:
+        trend_messages.append(f"⚠️ Big streak ongoing: {current_big_streak} - consider Small soon")
+    if current_small_streak >= 3:
+        trend_messages.append(f"⚠️ Small streak ongoing: {current_small_streak} - consider Big soon")
+    if current_red_streak >= 3:
+        trend_messages.append(f"⚠️ Red streak ongoing: {current_red_streak} - consider Green soon")
+    if current_green_streak >= 3:
+        trend_messages.append(f"⚠️ Green streak ongoing: {current_green_streak} - consider Red soon")
+    
+    if not trend_messages:
+        return None
+    
+    current_time = datetime.now(pytz.utc).strftime('%H:%M:%S')
+    message = f"📊 Market Trend Analysis ({current_time})\n\n"
+    message += "\n".join(trend_messages)
+    message += "\n\n💡 Use these insights to adjust your betting strategy"
+    
+    return message
+
+async def send_trend_notifications(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        trend_message = await analyze_trends()
+        if not trend_message:
+            return
+        
+        # Send to all subscribers
+        for platform in subscribers:
+            for game_type in subscribers[platform]:
+                for chat_id in subscribers[platform][game_type]:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=trend_message
+                        )
+                    except Exception as e:
+                        logging.error(f"Error sending trend notification to {chat_id}: {str(e)}")
+                        subscribers[platform][game_type].discard(chat_id)
+        
+        # Schedule next notification with random interval
+        next_interval = random.randint(
+            (TREND_NOTIFICATION_INTERVAL_MIN - TREND_NOTIFICATION_VARIATION_MIN) * 60,
+            (TREND_NOTIFICATION_INTERVAL_MIN + TREND_NOTIFICATION_VARIATION_MIN) * 60
+        )
+        
+        context.job_queue.run_once(
+            send_trend_notifications,
+            next_interval
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in trend notification: {str(e)}")
+
 async def analyze_and_predict_1min(context: ContextTypes.DEFAULT_TYPE):
     try:
         current_time = datetime.now(pytz.utc)
-        logging.info(f"Running 1-minute BDG analysis at {current_time}...")
+        logging.info(f"Running 1-minute analysis at {current_time}...")
         
-        numbers = await fetch_bdg_results('1min')
-        if not numbers:
-            logging.warning("No BDG results generated in this cycle")
-            return
-        
-        live_results.extend(numbers)
-        predictions = analyze_patterns(numbers, '1min')
-        
-        game_history.append({
-            'time': current_time,
-            'game': '1min',
-            'numbers': numbers,
-            'predictions': predictions,
-            'platform': 'bdg'
-        })
-        
-        for platform in ['bdg', 'tc', 'mumbai', 'daman']:
+        for platform in ['bdg', 'tc', 'mumbai', 'daman']:  # Removed 'auto' from 1min
+            numbers = await fetch_results(platform, '1min')
+            if not numbers:
+                logging.warning(f"No {platform} results generated in this cycle")
+                continue
+            
+            live_results.extend(numbers)
+            predictions = analyze_patterns(numbers, '1min', platform)
+            
+            game_history.append({
+                'time': current_time,
+                'game': '1min',
+                'numbers': numbers,
+                'predictions': predictions,
+                'platform': platform
+            })
+            
             if subscribers[platform]['1min']:
-                recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
+                extractor = get_extractor(platform)
+                recent_digits = [extractor(num)[-3:] for num in numbers[-2:]]
                 message = (
                     f"⏰ {platform.upper()} 1-Minute Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
                     f"🔢 Recent Periods: {numbers[-2:]}\n"
@@ -384,32 +690,33 @@ async def analyze_and_predict_1min(context: ContextTypes.DEFAULT_TYPE):
                         subscribers[platform]['1min'].discard(chat_id)
         
     except Exception as e:
-        logging.error(f"Error in 1-minute BDG analysis: {str(e)}")
+        logging.error(f"Error in 1-minute analysis: {str(e)}")
 
 async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
     try:
         current_time = datetime.now(pytz.utc)
-        logging.info(f"Running 30-second BDG analysis at {current_time}...")
+        logging.info(f"Running 30-second analysis at {current_time}...")
         
-        numbers = await fetch_bdg_results('30sec')
-        if not numbers:
-            logging.warning("No BDG results generated in this cycle")
-            return
-        
-        live_results.extend(numbers)
-        predictions = analyze_patterns(numbers, '30sec')
-        
-        game_history.append({
-            'time': current_time,
-            'game': '30sec',
-            'numbers': numbers,
-            'predictions': predictions,
-            'platform': 'bdg'
-        })
-        
-        for platform in ['bdg', 'tc', 'mumbai', 'daman']:
+        for platform in ['bdg', 'tc', 'mumbai', 'daman']:  # Removed 'auto' from 30sec
+            numbers = await fetch_results(platform, '30sec')
+            if not numbers:
+                logging.warning(f"No {platform} results generated in this cycle")
+                continue
+            
+            live_results.extend(numbers)
+            predictions = analyze_patterns(numbers, '30sec', platform)
+            
+            game_history.append({
+                'time': current_time,
+                'game': '30sec',
+                'numbers': numbers,
+                'predictions': predictions,
+                'platform': platform
+            })
+            
             if subscribers[platform]['30sec']:
-                recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
+                extractor = get_extractor(platform)
+                recent_digits = [extractor(num)[-3:] for num in numbers[-2:]]
                 message = (
                     f"⏰ {platform.upper()} 30-Second Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
                     f"🔢 Recent Periods: {numbers[-2:]}\n"
@@ -417,7 +724,7 @@ async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
                     f"🎯 Betting Recommendations:\n"
                     f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
                     f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
-                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['numbers'])}\n"
+                    f"3. Hot Numbers: {', '.join(str(n) for n in predictions['hot_numbers'])}\n"
                     f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
                     f"📈 Overall Confidence: {predictions['confidence']}%\n"
                     f"🔄 Next update at {(current_time + timedelta(seconds=30)).strftime('%H:%M:%S UTC')}"
@@ -431,7 +738,54 @@ async def analyze_and_predict_30sec(context: ContextTypes.DEFAULT_TYPE):
                         subscribers[platform]['30sec'].discard(chat_id)
         
     except Exception as e:
-        logging.error(f"Error in 30-second BDG analysis: {str(e)}")
+        logging.error(f"Error in 30-second analysis: {str(e)}")
+
+async def analyze_and_predict_45sec(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        current_time = datetime.now(pytz.utc)
+        logging.info(f"Running 45-second analysis at {current_time}...")
+        
+        platform = 'auto'
+        numbers = await fetch_results(platform, '45sec')
+        if not numbers:
+            logging.warning("No AUTO results generated in this cycle")
+            return
+        
+        live_results.extend(numbers)
+        predictions = analyze_patterns(numbers, '45sec', platform)
+        
+        game_history.append({
+            'time': current_time,
+            'game': '45sec',
+            'numbers': numbers,
+            'predictions': predictions,
+            'platform': platform
+        })
+        
+        if subscribers[platform]['45sec']:
+            message = (
+                f"🎰 AUTO Roulette 45-Second Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
+                f"🔢 Recent Numbers: {numbers[-5:]}\n\n"  # Show last 5 numbers
+                f"🎯 Betting Recommendations:\n"
+                f"1. Even/Odd: {predictions['even_odd'][0]} ({predictions['even_odd'][1]}% confidence)\n"
+                f"2. Red/Black: {predictions['red_black'][0]} ({predictions['red_black'][1]}% confidence)\n"
+                f"3. Low/High: {predictions['low_high'][0]} ({predictions['low_high'][1]}% confidence)\n"
+                f"4. Dozens: {predictions['dozens'][0]} ({predictions['dozens'][1]}% confidence)\n"
+                f"5. Hot Numbers (1-18): {', '.join(str(n) for n in predictions['hot_numbers_low'])}\n"
+                f"6. Hot Numbers (19-36): {', '.join(str(n) for n in predictions['hot_numbers_high'])}\n\n"
+                f"📈 Overall Confidence: {predictions['confidence']}%\n"
+                f"🔄 Next update at {(current_time + timedelta(seconds=45)).strftime('%H:%M:%S UTC')}"
+            )
+            
+            for chat_id in subscribers[platform]['45sec']:
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=message)
+                except Exception as e:
+                    logging.error(f"Error sending to {chat_id}: {str(e)}")
+                    subscribers[platform]['45sec'].discard(chat_id)
+    
+    except Exception as e:
+        logging.error(f"Error in 45-second analysis: {str(e)}")
 
 async def perform_prediction_update(update: Update, platform: str):
     query = update.callback_query
@@ -447,16 +801,16 @@ async def perform_prediction_update(update: Update, platform: str):
     current_time = datetime.now(pytz.utc)
     logging.info(f"Running manual prediction update for {platform} at {current_time}")
     
-    game_types = ['1min', '30sec']
+    game_types = ['1min', '30sec', '45sec'] if platform == 'auto' else ['1min', '30sec']
     messages = []
     
     for game_type in game_types:
-        numbers = await fetch_bdg_results(game_type)
+        numbers = await fetch_results(platform, game_type)
         if not numbers:
             messages.append(f"⚠️ Could not generate results for {platform.upper()} {game_type}")
             continue
         
-        predictions = analyze_patterns(numbers, game_type)
+        predictions = analyze_patterns(numbers, game_type, platform)
         
         game_history.append({
             'time': current_time,
@@ -466,18 +820,33 @@ async def perform_prediction_update(update: Update, platform: str):
             'platform': platform
         })
         
-        recent_digits = [extract_bdg_digits(num)[-3:] for num in numbers[-2:]]
-        message = (
-            f"🔄 Manual Update: {platform.upper()} {game_type} Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
-            f"🔢 Recent Periods: {numbers[-2:]}\n"
-            f"🔍 Last Digits: {recent_digits}\n\n"
-            f"🎯 Updated Betting Recommendations:\n"
-            f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
-            f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
-            f"3. Hot Numbers: {', '.join(str(n) for n in predictions['hot_numbers'])}\n"
-            f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
-            f"📈 Overall Confidence: {predictions['confidence']}%"
-        )
+        if platform == 'auto':
+            message = (
+                f"🔄 Manual Update: {platform.upper()} {game_type} Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
+                f"🔢 Recent Numbers: {numbers[-5:]}\n\n"  # Show last 5 numbers
+                f"🎯 Updated Betting Recommendations:\n"
+                f"1. Even/Odd: {predictions['even_odd'][0]} ({predictions['even_odd'][1]}% confidence)\n"
+                f"2. Red/Black: {predictions['red_black'][0]} ({predictions['red_black'][1]}% confidence)\n"
+                f"3. Low/High: {predictions['low_high'][0]} ({predictions['low_high'][1]}% confidence)\n"
+                f"4. Dozens: {predictions['dozens'][0]} ({predictions['dozens'][1]}% confidence)\n"
+                f"5. Hot Numbers (1-18): {', '.join(str(n) for n in predictions['hot_numbers_low'])}\n"
+                f"6. Hot Numbers (19-36): {', '.join(str(n) for n in predictions['hot_numbers_high'])}\n\n"
+                f"📈 Overall Confidence: {predictions['confidence']}%"
+            )
+        else:
+            extractor = get_extractor(platform)
+            recent_digits = [extractor(num)[-3:] for num in numbers[-2:]]
+            message = (
+                f"🔄 Manual Update: {platform.upper()} {game_type} Prediction ({current_time.strftime('%H:%M:%S UTC')})\n"
+                f"🔢 Recent Periods: {numbers[-2:]}\n"
+                f"🔍 Last Digits: {recent_digits}\n\n"
+                f"🎯 Updated Betting Recommendations:\n"
+                f"1. Big/Small: {predictions['big_small'][0]} ({predictions['big_small'][1]}% confidence)\n"
+                f"2. Color: {predictions['color'][0]} ({predictions['color'][1]}% confidence)\n"
+                f"3. Hot Numbers: {', '.join(str(n) for n in predictions['hot_numbers'])}\n"
+                f"4. Cold Numbers: {', '.join(str(n) for n in predictions['cold_numbers'])}\n\n"
+                f"📈 Overall Confidence: {predictions['confidence']}%"
+            )
         messages.append(message)
         
         for chat_id in subscribers[platform][game_type]:
@@ -544,6 +913,7 @@ async def edit_links_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎰 Edit TC Link", callback_data='edit_tc_link')],
         [InlineKeyboardButton("🏙️ Edit Mumbai Link", callback_data='edit_mumbai_link')],
         [InlineKeyboardButton("🌉 Edit Daman Link", callback_data='edit_daman_link')],
+        [InlineKeyboardButton("🎰 Edit AUTO Link", callback_data='edit_auto_link')],
         [InlineKeyboardButton("🔙 Back", callback_data='platform_links')]
     ]
     
@@ -611,25 +981,96 @@ async def show_platform_menu(update: Update, platform: str):
     query = update.callback_query
     await query.answer()
     
+    user_id = query.from_user.id
+    user_active_chains[user_id] = platform  # Set the active chain for this user
+    
     platform_name = {
         'bdg': '🎲 BDG Games',
         'tc': '🎰 TC Lottery',
         'mumbai': '🏙️ Big Mumbai',
-        'daman': '🌉 Daman Games'
+        'daman': '🌉 Daman Games',
+        'auto': '🎰 AUTO Roulette'
     }.get(platform, platform)
     
+    if platform == 'auto':
+        keyboard = [
+            [InlineKeyboardButton("45-Second Predictions", callback_data=f'subscribe_{platform}_45sec')],
+            [InlineKeyboardButton("🎲 Roulette Rules", callback_data='roulette_rules')],
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_to_main')]
+        ]
+    else:
+        keyboard = [
+            [
+                InlineKeyboardButton("1-Minute Predictions", callback_data=f'subscribe_{platform}_1min'),
+                InlineKeyboardButton("30-Second Predictions", callback_data=f'subscribe_{platform}_30sec')
+            ],
+            [InlineKeyboardButton("🔄 Change Chain", callback_data='change_chain')],
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_to_main')]
+        ]
+    
+    await query.edit_message_text(
+        f"{platform_name} - Select Game Type:\n\n"
+        f"Current Chain: {AVAILABLE_CHAINS[platform]}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_roulette_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    rules = """
+🎰 AUTO Roulette Rules:
+
+🔴 Red Numbers: 1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36
+⚫ Black Numbers: 2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35
+🟢 Green Number: 0
+
+Bet Types:
+1️⃣ Even/Odd: Bet on whether the number will be even or odd
+2️⃣ Red/Black: Bet on the color of the number
+3️⃣ Low/High: Bet on 1-18 (low) or 19-36 (high)
+4️⃣ Dozens: Bet on 1-12, 13-24, or 25-36
+5️⃣ Straight: Bet on a single number (0-36)
+
+The bot will predict all these bet types simultaneously!
+"""
+    
     keyboard = [
-        [
-            InlineKeyboardButton("1-Minute Predictions", callback_data=f'subscribe_{platform}_1min'),
-            InlineKeyboardButton("30-Second Predictions", callback_data=f'subscribe_{platform}_30sec')
-        ],
-        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_to_main')]
+        [InlineKeyboardButton("🔙 Back to AUTO Roulette", callback_data='platform_auto')]
     ]
     
     await query.edit_message_text(
-        f"{platform_name} - Select Game Type:",
+        rules,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+async def change_chain_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    current_platform = user_active_chains.get(user_id, 'bdg')
+    
+    keyboard = []
+    for platform, name in AVAILABLE_CHAINS.items():
+        if platform != current_platform:
+            keyboard.append([InlineKeyboardButton(name, callback_data=f'switch_chain_{platform}')])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f'platform_{current_platform}')])
+    
+    await query.edit_message_text(
+        "🔀 Select a different chain to switch to:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def switch_chain(update: Update, platform: str):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_active_chains[user_id] = platform
+    
+    await show_platform_menu(update, platform)
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not game_history:
@@ -644,17 +1085,31 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = "📊 Recent Prediction History (Last 5):\n\n"
     for entry in list(game_history)[-5:]:
-        message += (
-            f"⏰ {entry['time'].strftime('%H:%M:%S')} ({entry['game']}) - {entry.get('platform', 'BDG').upper()}\n"
-            f"🔢 Numbers: {entry['numbers'][-2:]}\n"
-            f"🎯 Predictions:\n"
-            f" - Big/Small: {entry['predictions']['big_small'][0]} ({entry['predictions']['big_small'][1]}%)\n"
-            f" - Color: {entry['predictions']['color'][0]} ({entry['predictions']['color'][1]}%)\n"
-            f" - Numbers: {', '.join(str(n) for n in entry['predictions']['numbers'])}\n"
-            f" - Hot Numbers: {', '.join(str(n) for n in entry['predictions'].get('hot_numbers', []))}\n"
-            f" - Cold Numbers: {', '.join(str(n) for n in entry['predictions'].get('cold_numbers', []))}\n"
-            f"📊 Confidence: {entry['predictions']['confidence']}%\n\n"
-        )
+        if entry.get('platform') == 'auto':
+            message += (
+                f"⏰ {entry['time'].strftime('%H:%M:%S')} ({entry['game']}) - {entry.get('platform', 'AUTO').upper()}\n"
+                f"🔢 Numbers: {entry['numbers'][-5:]}\n"  # Show last 5 numbers for AUTO
+                f"🎯 Predictions:\n"
+                f" - Even/Odd: {entry['predictions']['even_odd'][0]} ({entry['predictions']['even_odd'][1]}%)\n"
+                f" - Red/Black: {entry['predictions']['red_black'][0]} ({entry['predictions']['red_black'][1]}%)\n"
+                f" - Low/High: {entry['predictions']['low_high'][0]} ({entry['predictions']['low_high'][1]}%)\n"
+                f" - Dozens: {entry['predictions']['dozens'][0]} ({entry['predictions']['dozens'][1]}%)\n"
+                f" - Hot Numbers (1-18): {', '.join(str(n) for n in entry['predictions']['hot_numbers_low'])}\n"
+                f" - Hot Numbers (19-36): {', '.join(str(n) for n in entry['predictions']['hot_numbers_high'])}\n"
+                f"📊 Confidence: {entry['predictions']['confidence']}%\n\n"
+            )
+        else:
+            message += (
+                f"⏰ {entry['time'].strftime('%H:%M:%S')} ({entry['game']}) - {entry.get('platform', 'BDG').upper()}\n"
+                f"🔢 Numbers: {entry['numbers'][-2:]}\n"
+                f"🎯 Predictions:\n"
+                f" - Big/Small: {entry['predictions']['big_small'][0]} ({entry['predictions']['big_small'][1]}%)\n"
+                f" - Color: {entry['predictions']['color'][0]} ({entry['predictions']['color'][1]}%)\n"
+                f" - Numbers: {', '.join(str(n) for n in entry['predictions']['numbers'])}\n"
+                f" - Hot Numbers: {', '.join(str(n) for n in entry['predictions'].get('hot_numbers', []))}\n"
+                f" - Cold Numbers: {', '.join(str(n) for n in entry['predictions'].get('cold_numbers', []))}\n"
+                f"📊 Confidence: {entry['predictions']['confidence']}%\n\n"
+            )
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -872,6 +1327,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'cancel_edit':
         await cancel_edit(update, context)
     
+    elif data == 'roulette_rules':
+        await show_roulette_rules(update, context)
+    
     elif data.startswith('subscribe_'):
         parts = data.split('_')
         if len(parts) == 3:
@@ -889,19 +1347,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'bdg': 'BDG Games',
                 'tc': 'TC Lottery',
                 'mumbai': 'Big Mumbai',
-                'daman': 'Daman Games'
+                'daman': 'Daman Games',
+                'auto': 'AUTO Roulette'
             }.get(platform, platform)
             
+            game_type_name = {
+                '1min': '1-Minute',
+                '30sec': '30-Second',
+                '45sec': '45-Second'
+            }.get(game_type, game_type)
+            
             message = (
-                f"✅ Successfully subscribed to {platform_name} {game_type} predictions!\n\n"
+                f"✅ Successfully subscribed to {platform_name} {game_type_name} predictions!\n\n"
                 f"⚠️ You have been automatically unsubscribed from all other games.\n\n"
-                f"You will now receive {game_type} predictions for {platform_name}."
+                f"You will now receive {game_type_name} predictions for {platform_name}."
             )
             
             await query.edit_message_text(
                 message,
                 reply_markup=get_main_menu_keyboard(user_id)
             )
+    
+    elif data == 'change_chain':
+        await change_chain_menu(update, context)
+    
+    elif data.startswith('switch_chain_'):
+        platform = data.split('_')[-1]
+        await switch_chain(update, platform)
     
     elif data == 'view_history':
         await show_history(update, context)
@@ -933,6 +1405,7 @@ def get_main_menu_keyboard(user_id):
         [InlineKeyboardButton("🎰 TC Lottery", callback_data='platform_tc')],
         [InlineKeyboardButton("🏙️ Big Mumbai", callback_data='platform_mumbai')],
         [InlineKeyboardButton("🌉 Daman Games", callback_data='platform_daman')],
+        [InlineKeyboardButton("🎰 AUTO Roulette", callback_data='platform_auto')],
         [InlineKeyboardButton("🔗 Platform Links", callback_data='platform_links')],
         [InlineKeyboardButton("📊 View History", callback_data='view_history')],
         [InlineKeyboardButton("🔍 EK Analysis", callback_data='ek_analysis')]
@@ -955,22 +1428,39 @@ def main():
     
     now = datetime.now(pytz.utc)
     
+    # Schedule 1-minute predictions
     next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
     initial_delay_1min = (next_minute - now).total_seconds()
-    
-    next_30sec = now.replace(second=30 if now.second < 30 else 0) + timedelta(minutes=0 if now.second < 30 else 1)
-    initial_delay_30sec = (next_30sec - now).total_seconds()
-    
     job_queue.run_repeating(
         analyze_and_predict_1min,
         interval=60,
         first=initial_delay_1min
     )
     
+    # Schedule 30-second predictions
+    next_30sec = now.replace(second=30 if now.second < 30 else 0) + timedelta(minutes=0 if now.second < 30 else 1)
+    initial_delay_30sec = (next_30sec - now).total_seconds()
     job_queue.run_repeating(
         analyze_and_predict_30sec,
         interval=30,
         first=initial_delay_30sec
+    )
+    
+    # Schedule 45-second predictions for AUTO Roulette
+    seconds = now.second
+    remainder = seconds % 45
+    initial_delay_45sec = (45 - remainder) if remainder != 0 else 0
+    job_queue.run_repeating(
+        analyze_and_predict_45sec,
+        interval=45,
+        first=initial_delay_45sec
+    )
+    
+    # Start trend notifications with random initial delay (5-10 minutes)
+    initial_delay = random.randint(300, 600)  # 5-10 minutes in seconds
+    job_queue.run_once(
+        send_trend_notifications,
+        initial_delay
     )
     
     app.add_handler(CommandHandler("start", start))
